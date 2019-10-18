@@ -19,7 +19,7 @@ try {
 }
 
 
-class Request{
+class Request {
 	public $Id;
 	public $PlayerName;
 	public $Text;

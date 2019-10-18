@@ -1,29 +1,37 @@
 #pragma semicolon 1
 
 #include <sourcemod>
-#include <morecolors>
+#include <multicolors>
+#undef REQUIRE_PLUGIN
+#include <ASteambot>
+#define REQUIRE_PLUGIN
 
 #pragma newdecls required
 
 #define MAX_COMMANDS 4
 #define MAX_CHARS_PER_CMD 12
+#define MAX_ADMINS 4
 
 ConVar g_cvDelay = null;
 ConVar g_cvMessage = null;
 ConVar g_cvMessageDelay = null;
 ConVar g_cvSavePath = null;
 ConVar g_cvUseDatabase = null;
+ConVar g_cvAdmins = null;
 Handle g_hTimerAd = null;
 Handle g_hSecCounter[MAXPLAYERS + 1] = {null, ...};
 Database g_dDbConn = null;
+bool g_bUseASteambot = false;
 bool requested[MAXPLAYERS + 1] = {false, ...};
 bool g_bIsDatabaseActive = false;
+bool g_bIsASteambotLoaded = false;
 char g_cAd[900] = "\0";
 char g_cError[256] = "\0";
-char Prefix[] = "\x00\x03[Request] \x01";
+char Prefix[] = "{green}[Request] {default}";
 int g_iSecs[MAXPLAYERS + 1] = {0, ...};
 DBStatement g_hStmt = null;
 ArrayList g_aCommands = null;
+ArrayList g_aAdmins = null;
 
 public Plugin myinfo =
 {
@@ -33,6 +41,44 @@ public Plugin myinfo =
 	version = "2.0",
 	url = "http://www.sourcemod.net"
 };
+
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error,int err_max) {
+    MarkNativeAsOptional("ASteambot_IsConnected");
+    MarkNativeAsOptional("ASteambot_SendMessage");
+    MarkNativeAsOptional("ASteambot_RegisterModule");
+    MarkNativeAsOptional("ASteambot_RemoveModule");
+    return APLRes_Success;
+}  
+
+public void OnAllPluginsLoaded()
+{
+    if (LibraryExists("ASteambot")) {
+    	g_bIsASteambotLoaded = true;
+    	ASteambot_RegisterModule("Arkarr_Request");
+	}
+}
+
+public void OnLibraryRemoved(const char[] name)
+{
+	if (StrEqual(name, "ASteambot"))
+	{
+		g_bIsASteambotLoaded = false;
+	}
+}
+ 
+public void OnLibraryAdded(const char[] name)
+{
+	if (StrEqual(name, "ASteambot"))
+	{
+		g_bIsASteambotLoaded = true;
+	}
+}
+
+public void OnPluginEnd()
+{
+	if(g_bIsASteambotLoaded)
+		ASteambot_RemoveModule();
+}
 
 public void OnPluginStart()
 {
@@ -47,6 +93,9 @@ public void OnPluginStart()
 	g_cvSavePath = CreateConVar("sm_save_path", "configs/request.txt", "Save path of the log file, BASED ON THE SOURCEMOD FOLDER !");
 	g_cvUseDatabase = CreateConVar("sm_use_database", "1", "Set if the plugin should save request in database or in a text file. Take effect only on map restart !");
 	CreateConVar("sm_custom_command","feedback,request,ask,rq", "What should be the command for the plugin ?").GetString(temp, sizeof temp);
+	g_bUseASteambot = CreateConVar("sm_request_use_asteambot", "0", "Use ASteambot to send the request to the admin.").BoolValue;
+	g_cvAdmins = CreateConVar("sm_request_asteambot_admins","STEAM_1:1:1234567,STEAM_1:0:56789012", "Which admins should the requests be sent to? Separated by a comma (they must be friends with bot).");
+	
 
 	totalCommands = ExplodeString(temp, ",", commands, sizeof commands, sizeof commands[]);
 	
@@ -78,6 +127,14 @@ public void OnPluginStart()
 
 public void OnConfigsExecuted()
 {
+	if (g_bUseASteambot && !g_bIsASteambotLoaded) {
+		SetFailState(
+		"[Request] To able to send requests to admins using ASteambot, \
+		it must be installed and running. See https://forums.alliedmods.net/showthread.php?t=273091"
+		);
+		return;
+	}
+	g_cvMessage.GetString(g_cAd, sizeof g_cAd);
 	g_hTimerAd = CreateTimer(g_cvMessageDelay.FloatValue, AdTimer, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -153,8 +210,7 @@ public Action CountSec(Handle timer, any client)
 
 public Action AdTimer(Handle timer, any user)  
 {
-	g_cvMessage.GetString(g_cAd, sizeof g_cAd);
-	CPrintToChatAll("%s%s", Prefix, Prefix);
+	CPrintToChatAll("%s%s", Prefix, g_cAd);
 }
 
 stock bool ProcessRequest(int client, const char[] request, bool UseDatabase)
@@ -208,7 +264,10 @@ stock bool ProcessRequest(int client, const char[] request, bool UseDatabase)
 				return false;
 			}
 		}
-		
+	
+		//#if defined _INCLUDE_ASteambot
+		SendRequestToBot(steamid, playername, request);
+		//#endif
 		g_iSecs[client] = g_cvDelay.IntValue;
 		requested[client] = true;
 		g_hSecCounter[client] = CreateTimer(1.0, CountSec, client, TIMER_REPEAT);
@@ -216,6 +275,37 @@ stock bool ProcessRequest(int client, const char[] request, bool UseDatabase)
 		return true;
 	}
 	return false;
+}
+
+public void SendRequestToBot(const char[] steamid, const char[] playername, const char[] request)
+{
+	if(!g_bUseASteambot)
+		return;
+	if (!ASteambot_IsConnected())
+	{
+		SetFailState("[Request] ASteambot is not connected.");
+		return;
+	}
+	if(g_aAdmins == null)
+	{
+		g_aAdmins = new ArrayList(24, MAX_ADMINS);
+		char temp[MAX_ADMINS * 24] = "\0", tempAdmins[MAX_ADMINS][24];
+		int total = 0;
+		g_cvAdmins.GetString(temp, sizeof temp);
+		total = ExplodeString(temp, ",", tempAdmins, sizeof tempAdmins, sizeof tempAdmins[]);
+		for (int i = 0; i < total; i++)
+		{
+			g_aAdmins.SetString(i, tempAdmins[i]);
+		}
+	}
+	char message[2084] = "\0";
+	char adminSteamid[24];
+	for (int i = 0; i < g_aAdmins.Length; i++)
+	{
+		g_aAdmins.GetString(i, adminSteamid, sizeof adminSteamid);
+		Format(message, sizeof message, "%s/\nNew request!\nFrom: %s (%s)\nRequest:\n %s\n", adminSteamid, playername, steamid, request);
+		ASteambot_SendMessage(AS_SIMPLE, message);
+	}
 }
 
 stock bool ExecuteQuery(Database db, const char[] query)
