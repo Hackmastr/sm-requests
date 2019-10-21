@@ -1,0 +1,19 @@
+"Phrases"
+{
+	"Ad"
+	{
+		"#format"		"{1:t}, {2:s}"
+		"en"			"{1} Want to suggest something? Make a request? You can use the next commands to do so: {purple}{2}{default}"
+	}
+	
+	"Successful"
+	{
+		"#format"		"{1:t}, {2:s}"
+		"en"			"{1} Thank you {purple}{2}{default}! Your request has been successfully sent!"
+	}
+	
+	"Prefix"
+	{
+		"en"			"{green}[Request]{default}"
+	}
+}
